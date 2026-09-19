@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>扫雷</title>
+  <style>
+    :root { --bg:#151a2d; --panel:#242b47; --panel-light:#303958; --text:#f4f6ff; --muted:#aeb8dc; --accent:#ffd166; --danger:#ff6b6b; }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; display:grid; place-items:center; padding:24px; color:var(--text); background:radial-gradient(circle at top, #2c3867 0, var(--bg) 55%); font-family:system-ui, -apple-system, "Microsoft YaHei", sans-serif; }
+    .game { width:min(100%, 650px); padding:24px; border-radius:24px; background:rgba(36,43,71,.94); box-shadow:0 24px 60px rgba(0,0,0,.35); }
+    header { display:flex; justify-content:space-between; align-items:center; gap:16px; margin-bottom:20px; }
+    h1 { margin:0; font-size:28px; letter-spacing:2px; }
+    .controls { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+    select, button { font:inherit; color:var(--text); border:0; border-radius:10px; background:var(--panel-light); padding:10px 12px; }
+    button { cursor:pointer; font-size:20px; transition:transform .15s, background .15s; }
+    button:hover { background:#414d76; transform:translateY(-1px); }
+    .stats { display:grid; grid-template-columns:repeat(3, 1fr); gap:10px; margin-bottom:18px; }
+    .stat { text-align:center; padding:10px; border-radius:12px; background:#1b2139; }
+    .stat b { display:block; color:var(--accent); font-size:22px; font-variant-numeric:tabular-nums; }
+    .stat span { color:var(--muted); font-size:12px; }
+    #status { min-height:24px; text-align:center; color:var(--muted); margin:2px 0 14px; }
+    #board { display:grid; gap:4px; width:fit-content; max-width:100%; margin:auto; padding:7px; border-radius:14px; background:#11162a; touch-action:manipulation; }
+    .cell { width:clamp(25px, 7vw, 38px); aspect-ratio:1; padding:0; display:grid; place-items:center; border-radius:7px; background:#3a4568; font-weight:800; font-size:clamp(14px, 4vw, 20px); }
+    .cell:hover { background:#4a587f; }
+    .cell.revealed { cursor:default; background:#202842; transform:none; }
+    .cell.mine { background:#743c52; }
+    .cell.flagged { color:var(--accent); }
+    .n1 { color:#78b7ff; } .n2 { color:#70df9d; } .n3 { color:#ff8d8d; } .n4 { color:#c9a7ff; } .n5 { color:#ffad72; } .n6 { color:#7ee4df; } .n7 { color:#f2f4ff; } .n8 { color:#bdc5e5; }
+    .hint { margin:16px 0 0; text-align:center; color:var(--muted); font-size:13px; }
+    kbd { padding:1px 5px; border-radius:4px; color:var(--text); background:#161b30; }
+    @media (max-width:410px) { body { padding:12px; } .game { padding:16px; border-radius:18px; } header { align-items:flex-start; flex-direction:column; } .cell { width:clamp(23px, 7.2vw, 30px); } }
+  </style>
+</head>
+<body>
+  <main class="game">
+    <header>
+      <h1>💣 扫雷</h1>
+      <div class="controls">
+        <label class="sr-only" for="difficulty">难度</label>
+        <select id="difficulty" aria-label="选择难度">
+          <option value="easy">初级 · 9 × 9</option>
+          <option value="medium" selected>中级 · 12 × 12</option>
+          <option value="hard">高级 · 16 × 16</option>
+        </select>
+        <button id="restart" aria-label="重新开始">😊</button>
+      </div>
+    </header>
+    <section class="stats" aria-label="游戏统计">
+      <div class="stat"><b id="mine-count">0</b><span>剩余地雷</span></div>
+      <div class="stat"><b id="timer">000</b><span>计时</span></div>
+      <div class="stat"><b id="best">--</b><span>本难度最佳</span></div>
+    </section>
+    <div id="status" aria-live="polite">点击任意格子开始游戏</div>
+    <div id="board" role="grid" aria-label="扫雷棋盘"></div>
+    <p class="hint">左键翻开格子 · 右键或长按插旗 · <kbd>R</kbd> 重新开始</p>
+  </main>
+  <script>
+    const levels = { easy:{rows:9, cols:9, mines:10}, medium:{rows:12, cols:12, mines:24}, hard:{rows:16, cols:16, mines:45} };
+    const board = document.querySelector('#board'), difficulty = document.querySelector('#difficulty');
+    const mineCount = document.querySelector('#mine-count'), timer = document.querySelector('#timer'), best = document.querySelector('#best');
+    const status = document.querySelector('#status'), restart = document.querySelector('#restart');
+    let cells, config, firstClick, ended, flags, elapsed, interval;
+
+    function start() {
+      config = levels[difficulty.value]; cells = []; firstClick = true; ended = false; flags = 0; elapsed = 0;
+      clearInterval(interval); timer.textContent = '000'; restart.textContent = '😊'; status.textContent = '点击任意格子开始游戏';
+      mineCount.textContent = config.mines; best.textContent = localStorage.getItem('minesweeper-' + difficulty.value) || '--';
+      board.style.gridTemplateColumns = `repeat(${config.cols}, 1fr)`; board.innerHTML = '';
+      for (let i=0; i < config.rows * config.cols; i++) {
+        const cell = { mine:false, revealed:false, flagged:false, count:0, el:document.createElement('button') };
+        cell.el.className = 'cell'; cell.el.type = 'button'; cell.el.setAttribute('role','gridcell'); cell.el.setAttribute('aria-label', '未翻开格子');
+        cell.el.addEventListener('click', () => reveal(i));
+        cell.el.addEventListener('contextmenu', e => { e.preventDefault(); flag(i); });
+        let press; cell.el.addEventListener('touchstart', () => press=setTimeout(() => flag(i), 500), {passive:true});
+        cell.el.addEventListener('touchend', () => clearTimeout(press));
+        board.append(cell.el); cells.push(cell);
+      }
+    }
+    function neighbors(i) { const r=Math.floor(i/config.cols), c=i%config.cols, out=[]; for(let dr=-1;dr<=1;dr++) for(let dc=-1;dc<=1;dc++) { const nr=r+dr,nc=c+dc; if((dr||dc)&&nr>=0&&nr<config.rows&&nc>=0&&nc<config.cols) out.push(nr*config.cols+nc); } return out; }
+    function plantMines(safe) {
+      const blocked = new Set([safe, ...neighbors(safe)]); let placed=0;
+      while(placed < config.mines) { const i=Math.floor(Math.random()*cells.length); if(!cells[i].mine && !blocked.has(i)) { cells[i].mine=true; placed++; } }
+      cells.forEach((cell,i) => cell.count=neighbors(i).filter(n=>cells[n].mine).length);
+    }
+    function beginClock() { interval=setInterval(() => { elapsed++; timer.textContent=String(elapsed).padStart(3,'0'); },1000); }
+    function reveal(i) {
+      if(ended || cells[i].flagged) return;
+      if(firstClick) { plantMines(i); firstClick=false; beginClock(); status.textContent='祝你好运！'; }
+      const cell=cells[i]; if(cell.revealed) return;
+      cell.revealed=true; cell.el.classList.add('revealed');
+      if(cell.mine) { cell.el.textContent='💣'; cell.el.classList.add('mine'); cell.el.setAttribute('aria-label','地雷'); finish(false); return; }
+      if(cell.count) { cell.el.textContent=cell.count; cell.el.classList.add('n'+cell.count); cell.el.setAttribute('aria-label', `附近有 ${cell.count} 个地雷`); }
+      else { cell.el.setAttribute('aria-label','空白格子'); neighbors(i).forEach(reveal); }
+      if(cells.filter(c=>!c.mine && c.revealed).length === cells.length-config.mines) finish(true);
+    }
+    function flag(i) {
+      const cell=cells[i]; if(ended || cell.revealed) return;
+      cell.flagged=!cell.flagged; flags += cell.flagged ? 1 : -1; cell.el.textContent=cell.flagged?'🚩':''; cell.el.classList.toggle('flagged',cell.flagged); cell.el.setAttribute('aria-label',cell.flagged?'已插旗':'未翻开格子'); mineCount.textContent=config.mines-flags;
+    }
+    function finish(win) {
+      ended=true; clearInterval(interval); restart.textContent=win?'😎':'😵';
+      if(win) { status.textContent=`恭喜通关！用时 ${elapsed} 秒`; const key='minesweeper-'+difficulty.value, old=Number(localStorage.getItem(key)); if(!old || elapsed<old) { localStorage.setItem(key,elapsed); best.textContent=elapsed; status.textContent+=' · 新纪录！'; } }
+      else { status.textContent='踩到地雷了，再试一次！'; cells.forEach(c=>{ if(c.mine) { c.el.textContent='💣'; c.el.classList.add('mine'); } }); }
+    }
+    restart.addEventListener('click',start); difficulty.addEventListener('change',start); document.addEventListener('keydown', e=>{ if(e.key.toLowerCase()==='r') start(); }); start();
+  </script>
+</body>
+</html>
